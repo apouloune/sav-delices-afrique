@@ -332,6 +332,33 @@ ${STYLE_REDACTION}`;
 async function processEmail(email, logs) {
   logs.push(`[${email.category}] ${email.subject}`);
 
+  // Remboursement = URGENT — alerte Telegram immédiate
+  if (email.category === "retour_remboursement") {
+    const clientInfo = await getClientInfo(email.from);
+    const fn = clientInfo?.firstName || email.name.split(" ")[0];
+    const demandeSummary = await summarize(email.body, 20);
+    totalStats.tg++; totalStats.urgent++;
+    await sendTelegram(
+      `🔴 URGENT — Remboursement / Retour
+${new Date().toLocaleTimeString("fr-FR")}
+
+`+
+      `👤 ${fn || email.name}
+📧 ${email.from}
+📋 ${email.subject}
+
+`+
+      `💬 Demande : ${demandeSummary}
+
+`+
+      `👉 Action requise de ta part.`
+    );
+    logs.push("📲 Telegram URGENT — Remboursement !");
+    dailySummary.push({ ...email, replied:false, demandeSummary, replySummary:"En attente de décision", clientName: fn, isTask: true, taskType:"remboursement" });
+    await gmailMarkRead(email.id);
+    return;
+  }
+
   if (email.category === "non_client") {
     logs.push("📋 Interne — résumé uniquement");
     const summary = await summarize(email.body, 15);
@@ -400,6 +427,67 @@ async function processEmail(email, logs) {
   } catch(e) {
     logs.push("❌ ERREUR: " + e.message);
     console.error(e);
+  }
+}
+
+
+// ── RAPPELS TÂCHES ────────────────────────────────────────────────────────
+async function sendTaskReminders() {
+  const now = Date.now();
+  const pending = tasks.filter(t => !t.done);
+  if (pending.length === 0) return;
+
+  for (const task of pending) {
+    const ageMs   = now - new Date(task.createdAt).getTime();
+    const ageDays = ageMs / (1000 * 60 * 60 * 24);
+
+    // Rappel à 3 jours, 5 jours, puis tous les jours
+    const shouldRemind =
+      (ageDays >= 3 && ageDays < 3.5 && !task.reminded3)  ||
+      (ageDays >= 5 && ageDays < 5.5 && !task.reminded5)  ||
+      (ageDays >= 7 && task.lastReminder && (now - task.lastReminder) >= 86400000);
+
+    if (!shouldRemind) continue;
+
+    const daysRounded = Math.floor(ageDays);
+    let urgencyIcon = "⚠️";
+    let urgencyMsg  = "Rappel";
+    if (ageDays >= 7)      { urgencyIcon = "🚨"; urgencyMsg = "URGENT — En attente depuis " + daysRounded + " jours !"; }
+    else if (ageDays >= 5) { urgencyIcon = "🔔"; urgencyMsg = "2ème rappel — " + daysRounded + " jours sans traitement"; }
+    else                   { urgencyIcon = "⚠️";  urgencyMsg = "1er rappel — " + daysRounded + " jours sans traitement"; }
+
+    const msg =
+      `${urgencyIcon} TÂCHE NON TRAITÉE — ${urgencyMsg}
+
+`+
+      `📋 ${task.title}
+`+
+      `🏷️ Type : ${task.type}
+`+
+      (task.clientName ? `👤 Client : ${task.clientName}
+` : "")+
+      (task.email ? `📧 ${task.email}
+` : "")+
+      (task.summary ? `
+💬 ${task.summary}
+` : "")+
+      `
+📅 Créée le : ${new Date(task.createdAt).toLocaleDateString("fr-FR")}`+
+      `
+⏰ En attente depuis ${daysRounded} jour(s)
+
+`+
+      `👉 Traite cette tâche sur ton dashboard.
+🤖 ${STORE_NAME}`;
+
+    await sendTelegram(msg);
+
+    // Mark reminder sent
+    if (ageDays >= 3 && !task.reminded3) task.reminded3 = true;
+    if (ageDays >= 5 && !task.reminded5) task.reminded5 = true;
+    task.lastReminder = now;
+
+    console.log(`📲 Rappel envoyé pour tâche #${task.id} (${daysRounded}j)`);
   }
 }
 
@@ -490,6 +578,9 @@ async function sendDailySummary() {
 // ── CRON ──────────────────────────────────────────────────────────────────
 cron.schedule("*/5 * * * *", () => runCycle());
 cron.schedule("0 20 * * *",  () => sendDailySummary());
+
+// Rappels tâches non traitées — tous les jours à 9h
+cron.schedule("0 9 * * *", () => sendTaskReminders());
 
 
 // ── DASHBOARD ─────────────────────────────────────────────────────────────
@@ -854,6 +945,68 @@ body::before {
 .fade-in:nth-child(4){animation-delay:.2s}
 .fade-in:nth-child(5){animation-delay:.25s}
 .fade-in:nth-child(6){animation-delay:.3s}
+
+/* ── TASKS ── */
+.tasks-list { display:flex; flex-direction:column; gap:8px; }
+.task-item {
+  display:flex; align-items:flex-start; gap:10px;
+  padding:12px 14px;
+  background:var(--creme);
+  border:1px solid var(--border);
+  border-radius:12px;
+  transition:all .2s;
+  animation: slideIn .25s ease;
+}
+.task-item.done {
+  opacity:.5;
+  background:#f5f5f0;
+  border-color:#ddd;
+}
+.task-item.done .task-title { text-decoration:line-through; color:var(--muted); }
+
+.task-check {
+  width:22px; height:22px; border-radius:6px; flex-shrink:0; margin-top:1px;
+  border:2px solid var(--border2); background:#fff; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  transition:all .18s; font-size:13px;
+}
+.task-check:hover { border-color:var(--vert); background:rgba(45,122,58,.08); }
+.task-check.checked { background:var(--vert); border-color:var(--vert); }
+
+.task-content { flex:1; min-width:0; }
+.task-header { display:flex; align-items:center; gap:6px; margin-bottom:3px; flex-wrap:wrap; }
+.task-title { font-size:13px; font-weight:600; color:var(--text); }
+.task-badge {
+  font-size:10px; font-weight:700; padding:2px 8px; border-radius:10px;
+  white-space:nowrap;
+}
+.badge-remboursement { background:#fef2f2; color:var(--rouge); }
+.badge-retour       { background:#fff7ed; color:var(--terre); }
+.badge-partenariat  { background:#f5f3ff; color:#7c3aed; }
+.badge-reclamation  { background:#fef2f2; color:var(--rouge); }
+.task-summary { font-size:11px; color:var(--muted); line-height:1.5; }
+.task-client  { font-size:11px; color:var(--terre); font-weight:600; margin-top:2px; }
+
+.task-delete {
+  width:24px; height:24px; border-radius:6px; flex-shrink:0;
+  border:none; background:transparent; cursor:pointer; color:var(--muted);
+  display:flex; align-items:center; justify-content:center; font-size:14px;
+  transition:all .15s;
+}
+.task-delete:hover { background:#fef2f2; color:var(--rouge); }
+
+.tasks-empty {
+  text-align:center; padding:24px 16px;
+  color:var(--muted); font-size:13px;
+}
+.tasks-empty span { font-size:28px; display:block; margin-bottom:8px; }
+
+.tasks-counter {
+  display:inline-flex; align-items:center; justify-content:center;
+  background:var(--rouge); color:#fff;
+  width:18px; height:18px; border-radius:50%; font-size:10px; font-weight:700;
+  margin-left:6px;
+}
 </style>
 </head>
 <body>
@@ -1043,6 +1196,23 @@ body::before {
           </div>
           <span class="esc-action" style="background:#f0fdf4;color:var(--vert2)">🔕 Auto</span>
         </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- TÂCHES À FAIRE -->
+  <div class="card fade-in" id="tasksCard">
+    <div class="card-header">
+      <span class="card-title">
+        Tâches à faire
+        <span class="tasks-counter" id="tasksCounter" style="display:none">0</span>
+      </span>
+      <span class="card-action" onclick="refreshTasks()">↻ Actualiser</span>
+    </div>
+    <div class="card-body" style="padding:12px 14px">
+      <div class="tasks-list" id="tasksList">
+        <div class="tasks-empty"><span>✅</span>Aucune tâche en attente</div>
       </div>
     </div>
   </div>
@@ -1239,6 +1409,177 @@ async function sendSummary() {
   } catch(e) { addLog("❌ " + e.message); }
 }
 
+
+// ── TASKS ──────────────────────────────────────────────────────────────────
+async function refreshTasks() {
+  try {
+    const r = await fetch(API + "/tasks");
+    const d = await r.json();
+    renderTasks(d.tasks || []);
+  } catch(e) { console.error("Tasks error:", e); }
+}
+
+function renderTasks(tasks) {
+  const list    = document.getElementById("tasksList");
+  const counter = document.getElementById("tasksCounter");
+  const pending = tasks.filter(t => !t.done);
+
+  // Update counter
+  if (pending.length > 0) {
+    counter.textContent = pending.length;
+    counter.style.display = "inline-flex";
+  } else {
+    counter.style.display = "none";
+  }
+
+  if (tasks.length === 0) {
+    list.innerHTML = '<div class="tasks-empty"><span>✅</span>Aucune tâche en attente</div>';
+    return;
+  }
+
+  list.innerHTML = "";
+  // Sort: undone first, then by date
+  const sorted = [...tasks].sort((a,b) => {
+    if (a.done !== b.done) return a.done ? 1 : -1;
+    return new Date(b.createdAt) - new Date(a.createdAt);
+  });
+
+  sorted.forEach(task => {
+    const div = document.createElement("div");
+    div.className = "task-item" + (task.done ? " done" : "");
+    div.innerHTML = \`
+      <div class="task-check \${task.done ? "checked" : ""}" onclick="toggleTask(\${task.id}, \${task.done})">
+        \${task.done ? "✓" : ""}
+      </div>
+      <div class="task-content">
+        <div class="task-header">
+          <span class="task-title">\${task.title}</span>
+          <span class="task-badge badge-\${task.type}">\${getBadgeLabel(task.type)}</span>
+        </div>
+        \${task.clientName ? \`<div class="task-client">👤 \${task.clientName} · \${task.email||""}</div>\` : ""}
+        \${task.summary ? \`<div class="task-summary">\${task.summary}</div>\` : ""}
+        \${task.doneAt ? \`<div class="task-summary" style="color:var(--vert)">✓ Traité le \${new Date(task.doneAt).toLocaleDateString("fr-FR")}</div>\` : ""}
+      </div>
+      <button class="task-delete" onclick="deleteTask(\${task.id})" title="Supprimer">×</button>
+    \`;
+    list.appendChild(div);
+  });
+}
+
+function getBadgeLabel(type) {
+  const labels = {
+    remboursement: "💸 Remboursement",
+    retour:        "↩️ Retour",
+    partenariat:   "🤝 Partenariat",
+    reclamation:   "🔴 Réclamation",
+  };
+  return labels[type] || type;
+}
+
+async function toggleTask(id, isDone) {
+  if (isDone) return; // Can't uncheck
+  try {
+    await fetch(API + "/tasks/done/" + id, { method: "POST" });
+    showToast("✅ Tâche marquée comme faite !");
+    refreshTasks();
+  } catch(e) { console.error(e); }
+}
+
+async function deleteTask(id) {
+  try {
+    await fetch(API + "/tasks/" + id, { method: "DELETE" });
+    refreshTasks();
+  } catch(e) { console.error(e); }
+}
+
+// Refresh tasks every 30 seconds
+setInterval(refreshTasks, 30000);
+refreshTasks();
+
+// ── INIT ───────────────────────────────────────────────────────────────────
+refreshStatus();
+startCountdown();
+setInterval(refreshStatus, 30000);
+</script>
+</body>
+</html>
+`;
+    if (nextCycleIn === 0) { refreshStatus(); nextCycleIn = 300; }
+  }, 1000);
+}
+
+// ── LAUNCH CYCLE ───────────────────────────────────────────────────────────
+async function launchCycle() {
+  const btn   = document.getElementById("btnCycle");
+  const icon  = document.getElementById("btnCycleIcon");
+  const label = document.getElementById("btnCycleLabel");
+
+  // Ripple visuel
+  btn.style.transform = "scale(.96)";
+  setTimeout(() => btn.style.transform = "", 120);
+
+  btn.disabled = true;
+  icon.className = "spin"; icon.textContent = "⚙️";
+  label.textContent = "Cycle en cours…";
+  addLog("🚀 Cycle lancé — " + new Date().toLocaleTimeString("fr-FR"));
+
+  try {
+    const r = await fetch(API + "/cycle", { method: "POST" });
+    const d = await r.json();
+    if (d.ok) {
+      addLog("✅ Cycle démarré sur Railway !");
+      showToast("🚀 Cycle SAV lancé avec succès !");
+      startCountdown();
+      setTimeout(refreshStatus, 4000);
+    } else {
+      addLog("⚠️ " + d.message);
+      showToast("⚠️ " + d.message);
+    }
+  } catch(e) {
+    addLog("❌ Erreur : " + e.message);
+    showToast("❌ Impossible de contacter Railway");
+  }
+
+  setTimeout(() => {
+    btn.disabled = false;
+    icon.className = ""; icon.textContent = "🚀";
+    label.textContent = "Lancer le cycle SAV";
+  }, 6000);
+}
+
+// ── TEST TELEGRAM ──────────────────────────────────────────────────────────
+async function testTelegram() {
+  addLog("📲 Test Telegram…");
+  showToast("📲 Envoi du message test…");
+  try {
+    const r = await fetch(API + "/test-telegram", { method: "POST" });
+    const d = await r.json();
+    if (d.ok) {
+      addLog("✅ Telegram fonctionne ! Vérifie ton téléphone 📱");
+      showToast("✅ Message Telegram envoyé !");
+      document.getElementById("tgDot").className = "conn-dot on";
+      document.getElementById("tgVal").textContent = "Connecté ✓";
+    } else {
+      addLog("❌ Telegram : " + (d.description || d.error));
+      showToast("❌ Telegram échoué");
+    }
+  } catch(e) { addLog("❌ " + e.message); }
+}
+
+// ── SEND SUMMARY ──────────────────────────────────────────────────────────
+async function sendSummary() {
+  addLog("📊 Envoi du résumé quotidien…");
+  try {
+    const r = await fetch(API + "/summary", { method: "POST" });
+    const d = await r.json();
+    if (d.ok) {
+      addLog("✅ Résumé envoyé sur Telegram !");
+      showToast("📊 Résumé quotidien envoyé !");
+      refreshStatus();
+    }
+  } catch(e) { addLog("❌ " + e.message); }
+}
+
 // ── INIT ───────────────────────────────────────────────────────────────────
 refreshStatus();
 startCountdown();
@@ -1270,8 +1611,30 @@ app.get("/", (req,res) => {
   });
 });
 
+// Tasks storage (in-memory, reset on restart)
+let tasks = [];
+let taskIdCounter = 1;
+
+app.get("/tasks", (req,res) => res.json({ tasks }));
+app.post("/tasks/add", (req,res) => {
+  const { title, type, clientName, email, summary } = req.body;
+  const task = { id: taskIdCounter++, title, type, clientName, email, summary, done: false, createdAt: new Date().toISOString() };
+  tasks.push(task);
+  res.json({ ok:true, task });
+});
+app.post("/tasks/done/:id", (req,res) => {
+  const task = tasks.find(t => t.id === parseInt(req.params.id));
+  if (task) { task.done = true; task.doneAt = new Date().toISOString(); }
+  res.json({ ok:true });
+});
+app.delete("/tasks/:id", (req,res) => {
+  tasks = tasks.filter(t => t.id !== parseInt(req.params.id));
+  res.json({ ok:true });
+});
+
 app.post("/cycle",         async (req,res) => { if(cycleRunning) return res.json({ok:false,message:"Cycle déjà en cours"}); runCycle(); res.json({ok:true,message:"Cycle lancé"}); });
 app.post("/summary",       async (req,res) => { await sendDailySummary(); res.json({ok:true}); });
+app.post("/reminders",     async (req,res) => { await sendTaskReminders(); res.json({ok:true, message:"Rappels vérifiés"}); });
 app.post("/test-telegram", async (req,res) => { const r = await sendTelegram(`🧪 Test — ${STORE_NAME}\n✅ Tout est opérationnel !\nSigné: ${SIGNATURE}`); res.json(r); });
 
 // ── START ─────────────────────────────────────────────────────────────────
