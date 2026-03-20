@@ -238,7 +238,7 @@ async function classifyEmail(email) {
   });
   const d = await r.json();
   const cat = d.content?.[0]?.text?.trim().toLowerCase() || "client_question";
-  const valid = ["client_reclamation","client_suivi","client_question","partenariat","partenariat_suite","non_client"];
+  const valid = ["client_reclamation","client_suivi","client_question","retour_remboursement","partenariat","partenariat_suite","non_client"];
   return valid.includes(cat) ? cat : "client_question";
 }
 
