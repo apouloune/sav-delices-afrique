@@ -17,7 +17,7 @@ const ANTHROPIC_KEY       = process.env.ANTHROPIC_API_KEY;
 const GMAIL_CLIENT_ID     = process.env.GMAIL_CLIENT_ID;
 const GMAIL_CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET;
 const GMAIL_REFRESH_TOKEN = process.env.GMAIL_REFRESH_TOKEN;
-const SIGNATURE = "Cordialement,\nDaniel, co-fondateur des Délices de l'Afrique 🌿";
+const SIGNATURE = "Cordialement,\nDaniel\nCo-fondateur des Délices de l'Afrique 🌿";
 
 const POLITIQUE = `
 POLITIQUE SAV OFFICIELLE :
@@ -27,6 +27,12 @@ POLITIQUE SAV OFFICIELLE :
 - Remboursements : 5-10 jours après réception du retour
 - Code promo première commande : CONAKRY10 (10% de réduction)
 - Si un client demande un code promo ou une réduction : proposer CONAKRY10
+
+RÈGLE ABSOLUE SUR LES RUPTURES DE STOCK :
+- Ne JAMAIS dire "je n'ai pas accès aux informations de stock"
+- Ne JAMAIS inviter le client à appeler ou à utiliser un formulaire de contact
+- Répondre : le produit sera bientôt disponible, nous faisons le maximum pour l'importer rapidement
+- Inviter le client à s'inscrire à notre newsletter sur le site pour être alerté dès que le produit est de retour en stock
 `;
 
 const STYLE_REDACTION = `
@@ -36,7 +42,9 @@ RÈGLES DE RÉDACTION STRICTES :
 3. Terminer par : "Je reste à votre disposition pour résoudre cette situation rapidement."
 4. JAMAIS de phrases fleuries comme "vos délicieux produits", "le meilleur de l'Afrique" en fin de mail
 5. Pas de formules creuses qui n'apportent rien
-6. Signature exacte :
+6. JAMAIS dire "je n'ai pas accès à cette information" — tu es Daniel, tu as accès à tout
+7. JAMAIS rediriger vers un téléphone ou formulaire de contact — tu ES le contact
+8. Signature exacte (respecter les sauts de ligne) :
 ${SIGNATURE}
 `;
 
