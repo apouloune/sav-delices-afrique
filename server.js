@@ -47,6 +47,13 @@ RÈGLE "JE RESTE À VOTRE DISPOSITION" :
 - N'utiliser cette phrase QUE si le problème n'est pas encore résolu
 - Si on a donné une solution complète (lien produit, info précise), NE PAS l'utiliser
 - Terminer directement par la signature dans ce cas
+
+RÈGLE ABSOLUE — LECTURE DU CONTEXTE :
+- Toujours lire l'intégralité du fil de conversation avant de répondre
+- Si le client envoie un message de remerciement ou de satisfaction : NE PAS répondre
+- Si le problème a déjà été résolu dans les échanges précédents : NE PAS répondre ou juste confirmer que tu es disponible
+- Ne jamais poser des questions sur un problème déjà résolu
+- Exemples de messages de clôture : "merci", "je vous remercie", "bon week-end", "c'est parfait", "tout est bon", "bien reçu"
 `;
 
 const STYLE_REDACTION = `
@@ -238,7 +245,7 @@ async function classifyEmail(email) {
   });
   const d = await r.json();
   const cat = d.content?.[0]?.text?.trim().toLowerCase() || "client_question";
-  const valid = ["client_reclamation","client_suivi","client_question","retour_remboursement","partenariat","partenariat_suite","non_client"];
+  const valid = ["client_reclamation","client_suivi","client_question","retour_remboursement","partenariat","partenariat_suite","non_client","cloture"];
   return valid.includes(cat) ? cat : "client_question";
 }
 
@@ -300,7 +307,7 @@ ${STYLE_REDACTION}`;
 
   const userPrompts = {
     client_suivi:
-      `Rédige une réponse pour ${fn} qui demande où est sa commande.\n\nEmail reçu:\n${email.body.slice(0,400)}\n\nInfos Shopify:\n${orderInfo}\n\nCommence par "Bonjour ${fn}," avec UNE phrase d'empathie. Donne le statut exact. Termine par "Je reste à votre disposition pour résoudre cette situation rapidement." puis la signature.`,
+      `Rédige une réponse pour ${fn} qui demande où est sa commande.\n\nEmail reçu:\n${email.body.slice(0,400)}\n\nInfos Shopify:\n${orderInfo}\n\nIMPORTANT : Lis bien le contexte. Si la question est déjà résolue dans le fil d'échanges, ne réponds pas ou dis simplement que tu es disponible si besoin.\nCommence par "Bonjour ${fn}," avec UNE phrase d'empathie. Donne le statut exact. Termine par "Je reste à votre disposition pour résoudre cette situation rapidement." puis la signature.`,
 
     client_question:
       `Rédige une réponse pour ${fn} qui pose une question sur nos produits ou notre boutique.\n\nQuestion:\n${email.body.slice(0,400)}\n\nRÈGLES IMPORTANTES :\n- Si le client demande un produit spécifique, inclure le lien direct : https://lesdelicesdelafrique.fr/search?q=NOM_DU_PRODUIT (remplace NOM_DU_PRODUIT par le nom exact du produit)\n- Si la réponse est simple et positive, répondre DIRECTEMENT sans empathie inutile\n- "Je reste à votre disposition" SEULEMENT si le problème n'est pas résolu, pas si on a donné une réponse complète\n- Produits importés de Guinée Conakry, méthodes traditionnelles\n- Livraison France, Belgique et Allemagne\n\nCommence par "Bonjour ${fn}," et termine par la signature.`,
@@ -330,8 +337,32 @@ ${STYLE_REDACTION}`;
 }
 
 // ── PROCESS EMAIL ─────────────────────────────────────────────────────────
+async function isClosingMessage(emailBody) {
+  const closingKeywords = [
+    "merci", "remercie", "thank you", "thanks",
+    "bon week-end", "bonne journée", "bonne soirée",
+    "bonne continuation", "cordialement", "à bientôt",
+    "parfait merci", "c'est bon", "c'est parfait",
+    "problème résolu", "tout est bon", "tout va bien",
+    "ça marche", "impeccable", "nickel", "super merci",
+    "je vous remercie", "bien reçu merci", "reçu merci"
+  ];
+  const body = emailBody.toLowerCase();
+  const matchCount = closingKeywords.filter(k => body.includes(k)).length;
+  // Si le message est court ET contient des mots de clôture = message de remerciement
+  return emailBody.length < 300 && matchCount >= 1;
+}
+
 async function processEmail(email, logs) {
   logs.push(`[${email.category}] ${email.subject}`);
+
+  // Vérifier si c'est un message de clôture/remerciement — ne pas répondre
+  if (await isClosingMessage(email.body)) {
+    logs.push("💬 Message de clôture/remerciement détecté — pas de réponse nécessaire");
+    await gmailMarkRead(email.id);
+    dailySummary.push({ ...email, replied: false, demandeSummary: "Message de clôture client — aucune action requise", replySummary: null });
+    return;
+  }
 
   // Remboursement = URGENT — alerte Telegram immédiate
   if (email.category === "retour_remboursement") {
@@ -365,6 +396,13 @@ ${new Date().toLocaleTimeString("fr-FR")}
     const summary = await summarize(email.body, 15);
     dailySummary.push({ ...email, replied:false, demandeSummary: summary, replySummary: null });
     await gmailMarkRead(email.id);
+    return;
+  }
+
+  if (email.category === "cloture") {
+    logs.push("✅ Message de clôture — conversation terminée, pas de réponse");
+    await gmailMarkRead(email.id);
+    dailySummary.push({ ...email, replied: false, demandeSummary: "Client satisfait — conversation clôturée", replySummary: null });
     return;
   }
 
